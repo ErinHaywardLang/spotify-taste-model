@@ -10,7 +10,7 @@ This is an exploratory project where I combine the Spotify Web API with Python a
 - Score and rank songs based on predicted enjoyment
 - Make listening to Discover Weekly & Release Radar more efficient 
 
-## Tech Stack 
+## Tech Stack 
 - Python
 - Jupyter Notebooks
 - Spotipy (Spotify Web API)
