@@ -22,6 +22,6 @@ This is an exploratory project where I combine the Spotify Web API with Python a
 ## Setup
 1. Clone the repo
 2. Create and activate a virtual environment 
-3. Install dependencies: `pip install -r requirements.txt`
+3. Install dependencies from the pinned list: `pip install -r requirements.txt`
 4. Add a `.env` file with your Spotify API credentials (WIP)
 5. Run notebooks or `run_weekly.py` to pull and score playlists (WIP)
