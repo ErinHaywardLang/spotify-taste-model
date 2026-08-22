@@ -6,126 +6,100 @@ Build a personal music preference model using historical listening data from man
 **Current Status:**
 - ✅ Spotify API access configured
 - ✅ Proven ML pipeline on GENERATED SAMPLE DATA with 95% accuracy on sample data (RandomForest + IterativeImputer)
-- 📊 **Current Dataset:** ~191 songs across 3 playlists (Like: 82, Dislike: 48, Neutral: 61)
-- 🔄 **Data-source pivot:** Spotify audio-features endpoints are **deprecated** and Spotify's terms now **prohibit ML/AI training on Spotify content**. Features will come from **GetSongBPM** instead.
+- 📊 **Current Dataset:** 304 unique tracks across 3 playlists (Like: 105, Neutral: 100, Dislike: 99)
+- ✅ **Feature extraction complete:** 242/304 (79.6%) tracks have ReccoBeats features
+- 🔄 **Data source:** Spotify audio-features endpoints are **deprecated** + Spotify's terms now **prohibit ML/AI training on Spotify content**. Features come from **ReccoBeats** (multi-phase comparison decided this).
 
 ## Data Source Decision (CRITICAL — read first)
 
-### Why the pivot?
+### Why the pivot away from Spotify audio features?
 - **Deprecation:** `GET /audio-features/{id}`, `GET /audio-features?ids=`, and `GET /audio-analysis/{id}` are officially marked **Deprecated** by Spotify. No replacement exists.
 - **ToS restriction:** Spotify's terms state Spotify content may not be used "to train a machine learning or AI model." This project's core purpose is training a model on audio-derived signals.
-- **ReccoBeats** (tested `GET https://api.reccobeats.com/v1/audio-features?ids=<spotify_ids>`, returns exact Spotify-style features, no auth) is a working shortcut but re-serves Spotify-derived data, so it carries the same ML-training lineage risk and is a single-maintainer service with no SLA.
-- **GetSongBPM** (api.getsong.co) computes features independently (tempo/key are its own; danceability/acousticness via AcousticBrainz/Essentia). This keeps training data outside Spotify's restricted-content terms.
 
-**Chosen Stack:** Spotify → track title, artist, playlist labels. **GetSongBPM** → acoustic features.
+### Candidate alternatives (tested)
+| Source | Endpoint | Coverage (real spike) | Feature set | Notes |
+|---|---|---|---|---|
+| **ReccoBeats** ✅ | `GET /v1/audio-features?ids=` | **18/21 (86%)** | Full (dance, energy, valence, acousticness, instrumentalness, liveness, speechiness, tempo, loudness, key, mode) | No auth; max 40 ids/req; resumable CSV cache in `src/reccobeats_client.py` |
+| GetSongBPM | `GET /search/` (api key) | 7/21 (@33%) | Reduced (tempo, key, mode, danceability, acousticness) | Skews mainstream; misses indie/electronic/newer |
+| Spotify deprecated | `GET /audio-features?ids=` | ~100% | Full | Deprecated + ToS-ban |
 
-### What GetSongBPM provides (and what it can't)
-| plan.md feature | GetSongBPM |
-|---|---|
-| danceability | ✅ (0–100 integer, /100) |
-| acousticness | ✅ (0–100 integer) |
-| tempo | ✅ |
-| key / mode | ✅ `key_of` / `open_key` (mode derivable) |
-| time_signature | ✅ `time_sig` |
-| energy | ❌ |
-| valence | ❌ |
-| instrumentalness | ❌ |
-| liveness | ❌ |
-| speechiness | ❌ |
-| loudness | ❌ |
+**Decision:** **ReccoBeats** is the primary audio-feature source. It matches Spotify's catalog by design (same record labels/ISRC), giving the best coverage for a personal, indie-heavy taste. GetSongBPM retains an optional cross-reference; its free API key registration required a backlink (kept in README).
 
-### GetSongBPM API facts (verified)
-- Base URL: `https://api.getsong.co/`
-- Auth: API key via `api_key` URL param or `X-API-KEY` header
-- Free tier: 3000 requests/hour; exceeding blocks the key for 1 hour
-- Mandatory **backlink** to getsongbpm.com (already added to README)
-- No public rate values beyond that; rate limits enforced server-side
+> Note on ToS: ReccoBeats re-serves Spotify-derived data (its own ToS says base metadata is aggregated from Spotify and the user is responsible for third-party compliance). This is a personal project; accepted as low-risk relative to the benefit. Cache aggressively, keep coverage metrics, and revisit if the service direction changes.
+
+### ReccoBeats API facts (verified)
+- Base URL: `https://api.reccobeats.com/v1`
+- Auth: none required
+- `GET /audio-features?ids=<comma> <comma>` → up to **40** ids/req
+- Response: `content[]` with original features + `isrc` + `href` (open.spotify.com/track/<id>)
+- No documented rate limit; 429 → retry with backoff
+- Single-maintainer, "as-is", may shut down anytime; **cache features to CSV** to be safe
 
 ---
 
-## Phase 0: GetSongBPM Coverage & Access Spike 🔧
+## Phase 0: Data-Source Spike ✅ DONE
 
-### Priority: HIGH (blocking)
-
-#### Tasks:
-1. ⏸️ **Register for API key** at getsongbpm.com/api (backlink to this repo's README)
-2. ⏸️ **Add `GETSONGBPM_API_KEY` to `.env`**
-3. ⏸️ **Build `getsongbpm_client.py`** — thin wrapper for `/search/` (song: + artist:) and `/song/{id}`
-4. ⏸️ **Coverage spike** — run against a ~20-track slice of real playlists
-   - Measure **match rate** (how many tracks resolve to a sensible song)
-   - Check disambiguation: live versions, covers, remixes, multiple artists
-   - Check missing-data patterns (obscure tracks, instrumentals)
-
-#### Success Criteria
-- [ ] API key works, no 401s
-- [ ] Match rate ≥ 80% on a 20-track slice
-- [ ] Confident matching rule documented (e.g. exact title + artist match preferred)
-
-#### Go / No-Go
-If match rate < 80%, fall back to discussion: accept lower coverage + imputation, or reconsider ReccoBeats (full 10 features, deprecated-spotify lineage risk).
+- Registered GetSongBPM API key (backlink added to README)
+- Built `src/getsongbpm_client.py` + spike script `00_getsongbpm_spike.py`
+- Ran 21-track spike across Like/Neutral/Dislike:
+  - GetSongBPM: **7/21 (33%)**
+  - ReccoBeats: **18/21 (86%)**
+- Decision: **ReccaBeats** (see table above)
+- Output: `data/phase0_spike_results.csv`
 
 ---
 
-## Phase 1: API Integration & Core Setup 🔧
+## Phase 1: API Integration & Core Setup 🔧 ✅ DONE
 
-#### Tasks:
-1. ✅ **Fix `src/spotify_client.py`** — cached-token auth flow exists; verify no remaining import errors
-2. ⏸️ **Locate target playlists** — find 'Like', 'Dislike', 'Neutral' playlists in 'ML' folder
-3. ⏸️ **Extract basic track data** — track_id, title, artist, playlist_name for all songs
-4. ⏸️ **Duplicate detection & resolution** — check for identical track_ids across playlists, keep most recent
-5. ⏸️ **Validate clean playlist access** — confirm API can read tracks from deduplicated playlists
+#### Tasks (done)
+- ✅ Authenticate with Spotify (cached token in `src/spotify_client.py`)
+- ✅ Locate target playlists: Like `2VGNDXi2HO5rDCtFfdgaA2`, Neutral `2so4nUGUWi305tYS2NVrnm`, Dislike `0KseX0ZufmhqOCdBujgrHO`
+- ✅ Extract basic track data (track_id, title, artist, album, added_at)
+- ✅ **Key finding:** Spotify's old `/playlists/{id}/tracks` endpoint now **403s**; the new **`/items`** endpoint must be used
+- ✅ Duplicate detection & resolution (keep most recently added)
 
-#### Success Criteria
-- Notebook can import and authenticate with Spotify API
-- Clean, deduplicated (no cross-playlist dup track_ids), non-conflicting labels
+#### Success Criteria (met)
+- Notebook can import/authenticate with Spotify API
+- Clean, deduplicated, non-conflicting labels
 - Ready for bulk feature extraction
 
 ---
 
-## Phase 2: Data Collection & Feature Extraction 📊
+## Phase 2: Data Collection & Feature Extraction 📊 ✅ DONE
 
-#### Pipeline: Spotify labels → GetSongBPM features
-
+#### Pipeline: Spotify labels → ReccoBeats features
 ```
-Spotify (Get Playlist Items, non-deprecated)
-    → track_id, title, artist[0].name, playlist_name
-    ── dedupe (keep most recently placed) ──
-GetSongBPM /search/ "song:<title> artist:<artist>"
-    → best-match song (score + validate)
-GetSongBPM /song/{id}
-    → tempo, time_sig, key_of, open_key, danceability, acousticness
-Normalize: danceability/100, acousticness/100, key→int, mode→major/minor
-Export CSV
+Spotify /playlists/{id}/items (paginated)
+    → (track_id, title, artist, album, added_at)
+    → dedupe across playlists (keep most recently added)
+ReccoBeats GET /v1/audio-features?ids=<chunk of 40>
+    → full feature set keyed by track id
+Merge → data/spotify_taste_dataset.csv
 ```
 
-#### Feature Pipeline
-**Final feature set:**
+## Feature Set (ReccaBeats, restored to original 10-feature plan)
 ```
-['danceability', 'acousticness', 'tempo', 'key', 'mode', 'time_signature']
+['danceability', 'energy', 'valence', 'acousticness',
+ 'instrumentalness', 'liveness', 'speechiness',
+ 'tempo', 'loudness', 'key', 'mode']
 ```
 
-**Additional Metadata:**
-- `track_title`, `artist_name`, `track_id`
-- `playlist_name` (Like/Dislike/Neutral)
-- `user_label` (liked/disliked/neutral)
+**Additional Metadata:** `track_id`, `title`, `artist`, `album`, `playlist_name`, `user_label` (liked/disliked/neutral)
 
-#### Data Quality Handling:
-- **Match scoring:** score candidate matches (title exact, artist match) and keep best; bucket unmatched as `missing`
-- **Missing features:** IterativeImputer (proven approach)
-- **Duplicate tracks (CRITICAL):** keep song from most recently modified playlist; exact track_id only
-- **Rate limits:** 3000 req/hr — ~191 tracks = fine with small sleep; retry with backoff on 429
-- **API failures:** retry logic, error logging
+#### Tasks (done)
+1. ✅ `src/reccobeats_client.py` — chunked, retry, resumable CSV cache
+2. ✅ `notebooks/01_data_collection.py` — full pipeline
+3. ✅ Export `data/features_cache.csv` (resumable) + `data/spotify_taste_dataset.csv`
 
-#### Tasks:
-1. ⏸️ **Build track extractor** — all tracks from three cleaned playlists
-2. ⏸️ **GetSongBPM feature fetcher** — search + song for each unique track
-3. ⏸️ **Data validation** — missing features, rate-limit handling
-4. ⏸️ **Export to CSV** — `data/` datasets
+#### Data Quality Handling
+- **Duplicate tracks (CRITICAL):** keep song from most recent `added_at`; exact `track_id` only
+- **Missing features:** ~20% of tracks (obscure/new) lack ReccoBeats data → impute with IterativeImputer or drop (decide in Phase 3/4)
+- **ReccoBeats limits:** 40 ids/req; resumable cache; retry/backoff
+- **Future growth:** increase playlist sizes to raise dataset/coverage, re-run collector (cache only fetches new ids)
 
-#### Success Criteria
-- Combined CSV with unique tracks only
-- All 6 features + labels where GetSongBPM has data
-- Coverage rate documented per playlist
+#### Results
+- 304 unique tracks (Like: 105, Neutral: 100, Dislike: 99)
+- 242/304 (79.6%) with features
 
 ---
 
@@ -133,18 +107,16 @@ Export CSV
 
 ### Priority: MEDIUM
 
-Note: reduced feature set (6 vs the original 10) means fewer dimensions to explore and weaker original "valence/danceability/energy" hypothesis tests. Visualizations now center on danceability/acousticness/tempo/key/mode.
-
 #### Visualization Pipeline
 1. **Feature Correlation Heatmap**
-2. **Class Distribution Analysis** — box plots of feature range by Like/Dislike/Neutral
+2. **Class Distribution Analysis** — box plots by Like/Dislike/Neutral
 3. **Interactive Scatter Plots** ⭐ **User Priority** — color-coded (Like: green, Dislike: red, Neutral: blue)
 4. **Feature Importance Analysis** — Random Forest importances
 
 #### Key Questions
 - Which features separate liked vs disliked best?
-- Do real patterns match the synthetic-data expectations (danceability/acousticness)?
-- What audio characteristics define personal taste in this 6-feature space?
+- Do real patterns match earlier synthetic-data expectations (valence/danceability/energy)?
+- Which features best separate this user's taste?
 
 ---
 
@@ -153,22 +125,21 @@ Note: reduced feature set (6 vs the original 10) means fewer dimensions to explo
 #### Proven Baseline (synthetic, 95%)
 ```python
 IterativeImputer(random_state=42)
-LabelEncoder()  # disliked=0, liked=1, neutral=2
+LabelEncoder()        # disliked=0, liked=1, neutral=2
 RandomForestClassifier(n_estimators=100, random_state=42)
 train_test_split(test_size=0.2, random_state=42)
 ```
 
-### Adaptations for real, reduced-feature data
-- **Smaller dataset (~191, imbalanced)** — cross-validation + stratified sampling
-- **Real-world noise** — lower expectations than 95% (fewer features, imperfect label separation)
+#### Adaptations for real data
+- **Smaller, imbalanced classes** — cross-validation + stratified sampling
+- **Real-world noise / ~20% missing** — IterativeImputer; expect < synthetic 95%
 - **Probability calibration** — better confidence for ranking
-- **Feature scaling** — for algorithm exploration beyond RF
 
 #### Evaluation Metrics
-Accuracy, Precision, Recall, F1 per class; confusion matrix; CV stability; feature imports.
+Accuracy, Precision, Recall, F1 per class; confusion matrix; CV stability; feature importances.
 
 #### Success Criteria
-- ≥ baseline-equivalent or documented lower, with honest expectations set (given 6 features, target ~real-world 70–80% may be more realistic than the synthetic 95%)
+- Documented honest performance (target ~70-85%, given real-world noise)
 - Stable CV
 - Saved model
 
@@ -178,10 +149,10 @@ Accuracy, Precision, Recall, F1 per class; confusion matrix; CV stability; featu
 
 ### Priority: LOW
 
-1. **Discover Weekly / Release Radar extraction** (Spotify — still non-deprecated)
-2. **GetSongBPM feature collection** for new tracks
+1. **Discover Weekly / Release Radar extraction** (Spotify `/items` — still non-deprecated)
+2. **ReccoBeats feature collection** for new tracks (reuses cache)
 3. **Batch prediction & ranking**
-4. Feedback → incremental retraining
+4. Feedback loop → incremental retraining
 
 ---
 
@@ -189,26 +160,30 @@ Accuracy, Precision, Recall, F1 per class; confusion matrix; CV stability; featu
 ```
 spotify-taste-model/
 ├── src/
-│   ├── spotify_client.py         # Spotify auth/playlist (labels)
-│   ├── getsongbpm_client.py      # GetSongBPM feature fetcher
-│   └── data_collector.py         # end-to-end collection
+│   ├── spotify_client.py         # Spotify auth/playlists
+│   ├── reccobeats_client.py      # ReccoBeats features (primary) ✅
+│   ├── getsongbpm_client.py      # GetSongBPM (optional cross-reference)
+│   └── data_collector.py         # (planned consolidation)
 ├── notebooks/
 │   ├── connect.ipynb
-│   ├── 01_data_collection.ipynb
-│   ├── 02_feature_exploration.ipynb
-│   └── 03_model_training.ipynb
-├── data/                         # real datasets + coverage report
+│   ├── 00_getsongbpm_spike.py    # Phase 0 coverage spike
+│   ├── 01_data_collection.py     # ✅ Phase 1+2
+│   ├── 02_feature_exploration.py # Phase 3 (planned)
+│   └── 03_model_training.py      # Phase 4 (planned)
+├── data/
+│   ├── features_cache.csv          # ✅ ReccoBeats resumable cache
+│   ├── spotify_taste_dataset.csv   # ✅ merged labeled dataset
+│   └── phase0_spike_results.csv    # ✅ spike comparison
 ├── models/
 └── plan.md
 ```
 
 ## Dependencies
-- **Existing:** `pandas`, `numpy`, `scikit-learn`, `spotipy`, `python-dotenv`, `requests` (already pinned in requirements.txt)
-- **New:** `plotly` (interactive scatter for Phase 3)
-- getSongBPM backlink in README (compliant)
+- **Existing:** `pandas`, `numpy`, `scikit-learn`, `spotipy`, `python-dotenv`, `requests`
+- **New:** `plotly` (interactive scatter, Phase 3)
 
 ## Risks & Open Items
-- **GetSongBPM coverage for niche/obscure tracks** — Phase 0 spike answers
-- **Feature count reduced** — model likely weaker; acceptance criteria set at Phase 4 to track
-- **API stability** — sole-maintainer, free tier, no guarantee; cache features to CSV to reduce re-fetch
-- **ML-training compliance** — features come from GetSongBPM's independent analysis, not Spotify audio values; Spotify used only for playlist structure/labels
+- **ReccaBeats reliability:** 18/21 spike → 79.6% real coverage; cache mitigates re-fetch costs; if service drops, revisit Spotify/local-audio path
+- **Feature coverage gap (~20%):** decide impute-vs-drop by label balance in Phase 3/4
+- **ML-training lineage:** ReccoBeats serves Spotify-derived data; accepted for personal use
+- **GetSongBPM backlink** kept in README (required for the registered API key)
