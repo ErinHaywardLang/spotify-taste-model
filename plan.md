@@ -1,39 +1,46 @@
-# Spotify Taste Model - Implementation Plan
+# Personal Music Recommender - Implementation Plan
 
 ## Project Overview
-Build a personal music preference model using historical listening data from manually curated Spotify playlists to predict song enjoyment and rank new music recommendations.
+Build a personal music preference model using historical listening data from manually curated playlists to predict song enjoyment and rank new music recommendations.
 
 **Current Status:**
-- ✅ Spotify API access configured
+- ✅ Playlist API access configured
 - ✅ Proven ML pipeline on GENERATED SAMPLE DATA with 95% accuracy on sample data (RandomForest + IterativeImputer)
 - 📊 **Current Dataset:** 304 unique tracks across 3 playlists (Like: 105, Neutral: 100, Dislike: 99)
 - ✅ **Feature extraction complete:** 242/304 (79.6%) tracks have ReccoBeats features
-- 🔄 **Data source:** Spotify audio-features endpoints are **deprecated** + Spotify's terms now **prohibit ML/AI training on Spotify content**. Features come from **ReccoBeats** (multi-phase comparison decided this).
+- 🔄 **Data source:** acoustic features come from **ReccoBeats**. Playlist data is sourced from my own Spotify playlists (read-only; used only as a list of songs).
 
 ## Data Source Decision (CRITICAL — read first)
 
-### Why the pivot away from Spotify audio features?
-- **Deprecation:** `GET /audio-features/{id}`, `GET /audio-features?ids=`, and `GET /audio-analysis/{id}` are officially marked **Deprecated** by Spotify. No replacement exists.
-- **ToS restriction:** Spotify's terms state Spotify content may not be used "to train a machine learning or AI model." This project's core purpose is training a model on audio-derived signals.
+### What's used where
+| Need | Source | Role |
+|---|---|---|
+| List of songs + labels | My own playlists (read via Spotify API) | Read-only track list + preference labels |
+| Acoustic features | **ReccoBeats** (`GET /v1/audio-features?ids=`) | All model features |
+| Playlist candidates (Phase 5) | My own playlists (Spotify API) | Read-only new-song candidates |
+
+- **Spotify** is used **only** to read my own playlists — a list of track titles/artists/labels. No Spotify audio or audio-feature content is ingested into the model.
+- **ReccoBeats** supplies every acoustic feature used for training/ranking.
+
+### Why not Spotify's own audio features?
+Spotify's audio-features endpoints (`GET /audio-features/{id}`, batch, and `audio-analysis`) are officially **deprecated**. Rather than build on a deprecated source, features come from ReccoBeats.
 
 ### Candidate alternatives (tested)
 | Source | Endpoint | Coverage (real spike) | Feature set | Notes |
 |---|---|---|---|---|
 | **ReccoBeats** ✅ | `GET /v1/audio-features?ids=` | **18/21 (86%)** | Full (dance, energy, valence, acousticness, instrumentalness, liveness, speechiness, tempo, loudness, key, mode) | No auth; max 40 ids/req; resumable CSV cache in `src/reccobeats_client.py` |
-| GetSongBPM | `GET /search/` (api key) | 7/21 (@33%) | Reduced (tempo, key, mode, danceability, acousticness) | Skews mainstream; misses indie/electronic/newer |
-| Spotify deprecated | `GET /audio-features?ids=` | ~100% | Full | Deprecated + ToS-ban |
+| GetSongBPM | `GET /search/` (api key) | 7/21 (33%) | Reduced (tempo, key, mode, danceability, acousticness) | Skews mainstream; misses indie/electronic/newer |
+| Spotify deprecated | `GET /audio-features?ids=` | ~100% | Full | Deprecated |
 
-**Decision:** **ReccoBeats** is the primary audio-feature source. It matches Spotify's catalog by design (same record labels/ISRC), giving the best coverage for a personal, indie-heavy taste. GetSongBPM retains an optional cross-reference; its free API key registration required a backlink (kept in README).
-
-> Note on ToS: ReccoBeats re-serves Spotify-derived data (its own ToS says base metadata is aggregated from Spotify and the user is responsible for third-party compliance). This is a personal project; accepted as low-risk relative to the benefit. Cache aggressively, keep coverage metrics, and revisit if the service direction changes.
+**Decision:** **ReccoBeats** is the primary audio-feature source. It matches the catalog by design (same record labels/ISRC), giving the best coverage for a personal, indie-heavy taste. GetSongBPM retains an optional cross-reference; its free API key registration required a backlink (kept in README).
 
 ### ReccoBeats API facts (verified)
 - Base URL: `https://api.reccobeats.com/v1`
 - Auth: none required
-- `GET /audio-features?ids=<comma> <comma>` → up to **40** ids/req
-- Response: `content[]` with original features + `isrc` + `href` (open.spotify.com/track/<id>)
+- `GET /audio-features?ids=<comma-separated>` → up to **40** ids/request
+- Response: `content[]` with features + `isrc` + `href` (open.spotify.com/track/<id>)
 - No documented rate limit; 429 → retry with backoff
-- Single-maintainer, "as-is", may shut down anytime; **cache features to CSV** to be safe
+- Single-maintainer, "as-is", may change anytime; **cache features to CSV** to be safe
 
 ---
 
@@ -44,7 +51,7 @@ Build a personal music preference model using historical listening data from man
 - Ran 21-track spike across Like/Neutral/Dislike:
   - GetSongBPM: **7/21 (33%)**
   - ReccoBeats: **18/21 (86%)**
-- Decision: **ReccaBeats** (see table above)
+- Decision: **ReccoBeats** (see table above)
 - Output: `data/phase0_spike_results.csv`
 
 ---
@@ -52,14 +59,14 @@ Build a personal music preference model using historical listening data from man
 ## Phase 1: API Integration & Core Setup 🔧 ✅ DONE
 
 #### Tasks (done)
-- ✅ Authenticate with Spotify (cached token in `src/spotify_client.py`)
+- ✅ Authenticate (cached token in `src/spotify_client.py`)
 - ✅ Locate target playlists: Like `2VGNDXi2HO5rDCtFfdgaA2`, Neutral `2so4nUGUWi305tYS2NVrnm`, Dislike `0KseX0ZufmhqOCdBujgrHO`
 - ✅ Extract basic track data (track_id, title, artist, album, added_at)
-- ✅ **Key finding:** Spotify's old `/playlists/{id}/tracks` endpoint now **403s**; the new **`/items`** endpoint must be used
+- ✅ **Key finding:** the old `/playlists/{id}/tracks` endpoint now **403s**; the **`/items`** endpoint must be used
 - ✅ Duplicate detection & resolution (keep most recently added)
 
 #### Success Criteria (met)
-- Notebook can import/authenticate with Spotify API
+- Notebook can import/authenticate
 - Clean, deduplicated, non-conflicting labels
 - Ready for bulk feature extraction
 
@@ -67,17 +74,17 @@ Build a personal music preference model using historical listening data from man
 
 ## Phase 2: Data Collection & Feature Extraction 📊 ✅ DONE
 
-#### Pipeline: Spotify labels → ReccoBeats features
+#### Pipeline: playlists → ReccoBeats features
 ```
 Spotify /playlists/{id}/items (paginated)
     → (track_id, title, artist, album, added_at)
     → dedupe across playlists (keep most recently added)
 ReccoBeats GET /v1/audio-features?ids=<chunk of 40>
     → full feature set keyed by track id
-Merge → data/spotify_taste_dataset.csv
+Merge → data/music_dataset.csv
 ```
 
-## Feature Set (ReccaBeats, restored to original 10-feature plan)
+## Feature Set (ReccoBeats)
 ```
 ['danceability', 'energy', 'valence', 'acousticness',
  'instrumentalness', 'liveness', 'speechiness',
@@ -89,7 +96,7 @@ Merge → data/spotify_taste_dataset.csv
 #### Tasks (done)
 1. ✅ `src/reccobeats_client.py` — chunked, retry, resumable CSV cache
 2. ✅ `notebooks/01_data_collection.py` — full pipeline
-3. ✅ Export `data/features_cache.csv` (resumable) + `data/spotify_taste_dataset.csv`
+3. ✅ Export `data/features_cache.csv` (resumable) + `data/music_dataset.csv`
 
 #### Data Quality Handling
 - **Duplicate tracks (CRITICAL):** keep song from most recent `added_at`; exact `track_id` only
@@ -149,7 +156,7 @@ Accuracy, Precision, Recall, F1 per class; confusion matrix; CV stability; featu
 
 ### Priority: LOW
 
-1. **Discover Weekly / Release Radar extraction** (Spotify `/items` — still non-deprecated)
+1. **Weekly playlist candidate extraction** (read my own playlists via Spotify `/items`)
 2. **ReccoBeats feature collection** for new tracks (reuses cache)
 3. **Batch prediction & ranking**
 4. Feedback loop → incremental retraining
@@ -158,9 +165,9 @@ Accuracy, Precision, Recall, F1 per class; confusion matrix; CV stability; featu
 
 ## Project Structure (target)
 ```
-spotify-taste-model/
+personal-music-recommender/
 ├── src/
-│   ├── spotify_client.py         # Spotify auth/playlists
+│   ├── spotify_client.py         # playlist auth/reading (labels)
 │   ├── reccobeats_client.py      # ReccoBeats features (primary) ✅
 │   ├── getsongbpm_client.py      # GetSongBPM (optional cross-reference)
 │   └── data_collector.py         # (planned consolidation)
@@ -171,9 +178,9 @@ spotify-taste-model/
 │   ├── 02_feature_exploration.py # Phase 3 (planned)
 │   └── 03_model_training.py      # Phase 4 (planned)
 ├── data/
-│   ├── features_cache.csv          # ✅ ReccoBeats resumable cache
-│   ├── spotify_taste_dataset.csv   # ✅ merged labeled dataset
-│   └── phase0_spike_results.csv    # ✅ spike comparison
+│   ├── features_cache.csv        # ✅ ReccoBeats resumable cache
+│   ├── music_dataset.csv         # ✅ merged labeled dataset
+│   └── phase0_spike_results.csv  # ✅ spike comparison
 ├── models/
 └── plan.md
 ```
@@ -183,7 +190,6 @@ spotify-taste-model/
 - **New:** `plotly` (interactive scatter, Phase 3)
 
 ## Risks & Open Items
-- **ReccaBeats reliability:** 18/21 spike → 79.6% real coverage; cache mitigates re-fetch costs; if service drops, revisit Spotify/local-audio path
+- **ReccoBeats reliability:** 18/21 spike → 79.6% real coverage; cache mitigates re-fetch costs; revisit feature source if the service changes direction
 - **Feature coverage gap (~20%):** decide impute-vs-drop by label balance in Phase 3/4
-- **ML-training lineage:** ReccoBeats serves Spotify-derived data; accepted for personal use
 - **GetSongBPM backlink** kept in README (required for the registered API key)

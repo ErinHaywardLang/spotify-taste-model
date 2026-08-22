@@ -4,7 +4,7 @@ Pipeline:
   Spotify /items (pagination) -> (track_id, title, artist, album, added_at)
   Dedupe across playlists: keep most recently added track_id
   ReccoBeats /audio-features by track_id (chunked, resumable) -> features
-  Merge -> data/spotify_taste_dataset.csv + data/features_cache.csv
+  Merge -> data/music_dataset.csv + data/features_cache.csv
 """
 import json
 import sys
@@ -77,7 +77,7 @@ def dedupe_tracks(records):
 def main():
     sp = get_spotify_client()
     features_csv = DATA_DIR / "features_cache.csv"
-    dataset_csv = DATA_DIR / "spotify_taste_dataset.csv"
+    dataset_csv = DATA_DIR / "music_dataset.csv"
 
     all_records = []
     for label, pid in PLAYLISTS.items():
