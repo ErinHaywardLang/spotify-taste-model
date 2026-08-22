@@ -3,263 +3,212 @@
 ## Project Overview
 Build a personal music preference model using historical listening data from manually curated Spotify playlists to predict song enjoyment and rank new music recommendations.
 
-**Current Status:** 
+**Current Status:**
 - ✅ Spotify API access configured
 - ✅ Proven ML pipeline on GENERATED SAMPLE DATA with 95% accuracy on sample data (RandomForest + IterativeImputer)
-- 📊 **Current Dataset:** Songs across 3 playlists (Like, Neutral, Dislike)
+- 📊 **Current Dataset:** ~191 songs across 3 playlists (Like: 82, Dislike: 48, Neutral: 61)
+- 🔄 **Data-source pivot:** Spotify audio-features endpoints are **deprecated** and Spotify's terms now **prohibit ML/AI training on Spotify content**. Features will come from **GetSongBPM** instead.
 
-## Core Goals
-1. **Feature Exploration:** Understand which Spotify audio features correlate with personal music preferences
-2. **Visualization:** Create color-coded scatter plots to visualize feature relationships across like/dislike/neutral preferences  
-3. **Model Training:** Adapt proven ML pipeline to work with real playlist data
-4. **Future Automation:** Weekly playlist ranking for Discover Weekly/Release Radar
+## Data Source Decision (CRITICAL — read first)
+
+### Why the pivot?
+- **Deprecation:** `GET /audio-features/{id}`, `GET /audio-features?ids=`, and `GET /audio-analysis/{id}` are officially marked **Deprecated** by Spotify. No replacement exists.
+- **ToS restriction:** Spotify's terms state Spotify content may not be used "to train a machine learning or AI model." This project's core purpose is training a model on audio-derived signals.
+- **ReccoBeats** (tested `GET https://api.reccobeats.com/v1/audio-features?ids=<spotify_ids>`, returns exact Spotify-style features, no auth) is a working shortcut but re-serves Spotify-derived data, so it carries the same ML-training lineage risk and is a single-maintainer service with no SLA.
+- **GetSongBPM** (api.getsong.co) computes features independently (tempo/key are its own; danceability/acousticness via AcousticBrainz/Essentia). This keeps training data outside Spotify's restricted-content terms.
+
+**Chosen Stack:** Spotify → track title, artist, playlist labels. **GetSongBPM** → acoustic features.
+
+### What GetSongBPM provides (and what it can't)
+| plan.md feature | GetSongBPM |
+|---|---|
+| danceability | ✅ (0–100 integer, /100) |
+| acousticness | ✅ (0–100 integer) |
+| tempo | ✅ |
+| key / mode | ✅ `key_of` / `open_key` (mode derivable) |
+| time_signature | ✅ `time_sig` |
+| energy | ❌ |
+| valence | ❌ |
+| instrumentalness | ❌ |
+| liveness | ❌ |
+| speechiness | ❌ |
+| loudness | ❌ |
+
+### GetSongBPM API facts (verified)
+- Base URL: `https://api.getsong.co/`
+- Auth: API key via `api_key` URL param or `X-API-KEY` header
+- Free tier: 3000 requests/hour; exceeding blocks the key for 1 hour
+- Mandatory **backlink** to getsongbpm.com (already added to README)
+- No public rate values beyond that; rate limits enforced server-side
+
+---
+
+## Phase 0: GetSongBPM Coverage & Access Spike 🔧
+
+### Priority: HIGH (blocking)
+
+#### Tasks:
+1. ⏸️ **Register for API key** at getsongbpm.com/api (backlink to this repo's README)
+2. ⏸️ **Add `GETSONGBPM_API_KEY` to `.env`**
+3. ⏸️ **Build `getsongbpm_client.py`** — thin wrapper for `/search/` (song: + artist:) and `/song/{id}`
+4. ⏸️ **Coverage spike** — run against a ~20-track slice of real playlists
+   - Measure **match rate** (how many tracks resolve to a sensible song)
+   - Check disambiguation: live versions, covers, remixes, multiple artists
+   - Check missing-data patterns (obscure tracks, instrumentals)
+
+#### Success Criteria
+- [ ] API key works, no 401s
+- [ ] Match rate ≥ 80% on a 20-track slice
+- [ ] Confident matching rule documented (e.g. exact title + artist match preferred)
+
+#### Go / No-Go
+If match rate < 80%, fall back to discussion: accept lower coverage + imputation, or reconsider ReccoBeats (full 10 features, deprecated-spotify lineage risk).
 
 ---
 
 ## Phase 1: API Integration & Core Setup 🔧
 
 #### Tasks:
-3. ⏸️ **Locate target playlists** - Find 'Like', 'Dislike', 'Neutral' playlists in 'ML' folder
-4. ⏸️ **Extract basic track data** - Get track_id and playlist_name for all songs
-5. ⏸️ **Duplicate detection & resolution** - Check for identical track_ids across playlists, keep most recent
-6. ⏸️ **Validate clean playlist access** - Confirm API can read tracks from deduplicated playlists
+1. ✅ **Fix `src/spotify_client.py`** — cached-token auth flow exists; verify no remaining import errors
+2. ⏸️ **Locate target playlists** — find 'Like', 'Dislike', 'Neutral' playlists in 'ML' folder
+3. ⏸️ **Extract basic track data** — track_id, title, artist, playlist_name for all songs
+4. ⏸️ **Duplicate detection & resolution** — check for identical track_ids across playlists, keep most recent
+5. ⏸️ **Validate clean playlist access** — confirm API can read tracks from deduplicated playlists
 
-#### Success Criteria:
-- Notebook can successfully import and authenticate with Spotify API
-- Can list and access tracks from the three target playlists
-- **Data integrity confirmed** - No duplicate track_ids across playlists
-- Ready for bulk feature extraction with clean, non-conflicting labels
+#### Success Criteria
+- Notebook can import and authenticate with Spotify API
+- Clean, deduplicated (no cross-playlist dup track_ids), non-conflicting labels
+- Ready for bulk feature extraction
 
 ---
 
 ## Phase 2: Data Collection & Feature Extraction 📊
 
-#### Data Collection Strategy
-**Target Playlists:**
-- Folder: 'ML' 
-- Playlists: 'Like', 'Dislike', 'Neutral'
+#### Pipeline: Spotify labels → GetSongBPM features
 
-#### Feature Extraction Pipeline
-**Core Audio Features (Proven Successful):**
 ```
-['danceability', 'energy', 'valence', 'acousticness', 
- 'instrumentalness', 'liveness', 'speechiness', 
- 'tempo', 'loudness', 'mode']
+Spotify (Get Playlist Items, non-deprecated)
+    → track_id, title, artist[0].name, playlist_name
+    ── dedupe (keep most recently placed) ──
+GetSongBPM /search/ "song:<title> artist:<artist>"
+    → best-match song (score + validate)
+GetSongBPM /song/{id}
+    → tempo, time_sig, key_of, open_key, danceability, acousticness
+Normalize: danceability/100, acousticness/100, key→int, mode→major/minor
+Export CSV
+```
+
+#### Feature Pipeline
+**Final feature set:**
+```
+['danceability', 'acousticness', 'tempo', 'key', 'mode', 'time_signature']
 ```
 
 **Additional Metadata:**
-- `track_name`, `artist_name`, `album_name`
-- `duration_ms`, `popularity`, `key`
+- `track_title`, `artist_name`, `track_id`
 - `playlist_name` (Like/Dislike/Neutral)
 - `user_label` (liked/disliked/neutral)
 
-#### Tasks:
-1. ⏸️ **Validate data integrity** - Confirm no duplicate track_ids remain after Phase 1 resolution
-2. ⏸️ **Build track extractor** - Pull all tracks from the three cleaned playlists
-3. ⏸️ **Implement feature fetcher** - Get audio features for each unique track
-4. ⏸️ **Data validation** - Handle missing features, API rate limits
-5. ⏸️ **Export to CSV** - Save combined dataset for analysis
-
 #### Data Quality Handling:
-- **Duplicate tracks (CRITICAL):** Check for identical track_ids across playlists
-  - Resolution strategy: Keep song from most recently modified playlist
-  - Rationale: Most recent placement represents current preference 
-  - Scope: Only exact track_id matches (ignore different versions/remixes)
-- Missing audio features: Use IterativeImputer (proven approach)
-- Duplicate tracks within playlists: Remove or flag appropriately  
-- API failures: Retry logic and error logging
+- **Match scoring:** score candidate matches (title exact, artist match) and keep best; bucket unmatched as `missing`
+- **Missing features:** IterativeImputer (proven approach)
+- **Duplicate tracks (CRITICAL):** keep song from most recently modified playlist; exact track_id only
+- **Rate limits:** 3000 req/hr — ~191 tracks = fine with small sleep; retry with backoff on 429
+- **API failures:** retry logic, error logging
 
-#### Success Criteria:
-- Combined dataset with unique tracks only (no cross-playlist duplicates)
-- All 10 core audio features present
-- Three classes with clean, non-conflicting labels (like/dislike/neutral)
-- Clean CSV ready for analysis
+#### Tasks:
+1. ⏸️ **Build track extractor** — all tracks from three cleaned playlists
+2. ⏸️ **GetSongBPM feature fetcher** — search + song for each unique track
+3. ⏸️ **Data validation** — missing features, rate-limit handling
+4. ⏸️ **Export to CSV** — `data/` datasets
+
+#### Success Criteria
+- Combined CSV with unique tracks only
+- All 6 features + labels where GetSongBPM has data
+- Coverage rate documented per playlist
 
 ---
 
 ## Phase 3: Feature Exploration & Visualization 🎨
 
-### Priority: MEDIUM (User's Primary Interest)
+### Priority: MEDIUM
 
-#### Correlation Analysis Goals
-**Primary Objectives:**
-- Identify which audio features best separate liked vs disliked songs
-- Visualize feature relationships and clustering patterns
-- Compare real preference patterns vs sample data insights
+Note: reduced feature set (6 vs the original 10) means fewer dimensions to explore and weaker original "valence/danceability/energy" hypothesis tests. Visualizations now center on danceability/acousticness/tempo/key/mode.
 
 #### Visualization Pipeline
 1. **Feature Correlation Heatmap**
-   - Audio feature intercorrelations
-   - Identify multicollinear features
-   
-2. **Class Distribution Analysis**
-   - Feature distributions by preference class
-   - Box plots showing feature ranges per class
-   
-3. **Interactive Scatter Plots** ⭐ **User Priority**
-   - Color-coded by preference (Like: green, Dislike: red, Neutral: blue)
-   - Any feature X vs feature Y combination
-   - Pattern identification and cluster analysis
+2. **Class Distribution Analysis** — box plots of feature range by Like/Dislike/Neutral
+3. **Interactive Scatter Plots** ⭐ **User Priority** — color-coded (Like: green, Dislike: red, Neutral: blue)
+4. **Feature Importance Analysis** — Random Forest importances
 
-4. **Feature Importance Analysis**
-   - Random Forest feature importance scores
-   - Comparison with sample data patterns
-   - Ranking of most predictive features
-
-#### Key Questions to Answer:
-- Which features show clearest separation between liked/disliked?
-- Do real preferences match sample data patterns (valence, danceability, energy)?
-- Are there unexpected feature correlations?
-- What audio characteristics define personal taste?
-
-#### Tasks:
-1. ⏸️ **Exploratory Data Analysis** - Basic statistics and distributions
-2. ⏸️ **Correlation matrix** - Feature relationships and multicollinearity
-3. ⏸️ **Class separation analysis** - Statistical differences between preference groups
-4. ⏸️ **Interactive visualization framework** - Flexible scatter plotting
-5. ⏸️ **Feature importance extraction** - From trained models
-6. ⏸️ **Insight documentation** - Key findings and patterns
-
-#### Success Criteria:
-- Clear visual understanding of feature-preference relationships
-- Identification of most discriminative features
-- Interactive exploration capability for any feature pair
-- Documented insights about personal music taste patterns
+#### Key Questions
+- Which features separate liked vs disliked best?
+- Do real patterns match the synthetic-data expectations (danceability/acousticness)?
+- What audio characteristics define personal taste in this 6-feature space?
 
 ---
 
 ## Phase 4: ML Pipeline Adaptation 🤖
 
-### Priority: MEDIUM
-
-#### Proven Baseline Approach
-**From Sample Data Success (95% accuracy):**
+#### Proven Baseline (synthetic, 95%)
 ```python
-# Preprocessing
-IterativeImputer(random_state=42)  # Handle missing values
-LabelEncoder()  # Target encoding (disliked=0, liked=1, neutral=2)
-
-# Model
+IterativeImputer(random_state=42)
+LabelEncoder()  # disliked=0, liked=1, neutral=2
 RandomForestClassifier(n_estimators=100, random_state=42)
-
-# Evaluation
 train_test_split(test_size=0.2, random_state=42)
-classification_report, accuracy_score
 ```
 
-#### Adaptations for Real Data
-**Dataset Size Considerations:**
-- Smaller dataset (~178-232 vs 300 sample songs)
-- Potentially unbalanced classes
-- Real-world noise and feature variations
+### Adaptations for real, reduced-feature data
+- **Smaller dataset (~191, imbalanced)** — cross-validation + stratified sampling
+- **Real-world noise** — lower expectations than 95% (fewer features, imperfect label separation)
+- **Probability calibration** — better confidence for ranking
+- **Feature scaling** — for algorithm exploration beyond RF
 
-**Enhanced Pipeline:**
-1. **Cross-validation** - For robust evaluation with limited data
-2. **Stratified sampling** - Maintain class balance in splits
-3. **Feature scaling** - For algorithm exploration beyond Random Forest
-4. **Probability calibration** - Better confidence scores for ranking
+#### Evaluation Metrics
+Accuracy, Precision, Recall, F1 per class; confusion matrix; CV stability; feature imports.
 
-#### Tasks:
-1. ⏸️ **Adapt preprocessing pipeline** - Real data → model-ready format
-2. ⏸️ **Implement baseline model** - RandomForest with proven parameters
-3. ⏸️ **Add cross-validation** - K-fold evaluation for robustness
-4. ⏸️ **Performance benchmarking** - Compare to 95% sample data accuracy
-5. ⏸️ **Feature importance analysis** - Real vs sample data comparison
-6. ⏸️ **Model persistence** - Save trained models for reuse
-
-#### Evaluation Metrics:
-- Accuracy, Precision, Recall, F1-score per class
-- Confusion matrix for error analysis
-- Feature importance rankings
-- Cross-validation stability
-
-#### Success Criteria:
-- Model performance ≥80% accuracy (accounting for real-world complexity)
-- Stable cross-validation results
-- Clear feature importance insights
-- Saved models ready for prediction
+#### Success Criteria
+- ≥ baseline-equivalent or documented lower, with honest expectations set (given 6 features, target ~real-world 70–80% may be more realistic than the synthetic 95%)
+- Stable CV
+- Saved model
 
 ---
 
 ## Phase 5: Future Automation 🔄
 
-### Priority: LOW (Future Enhancement)
+### Priority: LOW
 
-#### Weekly Playlist Ranking System
-1. **Discover Weekly/Release Radar extraction**
-2. **Automated feature collection**
-3. **Batch prediction and ranking**
-4. **Results export/integration**
-
-#### Model Improvement Pipeline
-1. **Feedback collection system**
-2. **Incremental model updates**
-3. **Performance monitoring**
-4. **Automated retraining**
+1. **Discover Weekly / Release Radar extraction** (Spotify — still non-deprecated)
+2. **GetSongBPM feature collection** for new tracks
+3. **Batch prediction & ranking**
+4. Feedback → incremental retraining
 
 ---
 
-## Technical Stack Confirmation
-
-### Dependencies (Already Installed)
-- **Data:** `pandas`, `numpy`
-- **ML:** `scikit-learn` (RandomForest, IterativeImputer, LabelEncoder)
-- **API:** `spotipy`, `python-dotenv`
-- **Viz:** `matplotlib`, `seaborn` (consider `plotly` for interactivity)
-- **Environment:** Jupyter notebooks, Python 3.11
-
-### Project Structure
+## Project Structure (target)
 ```
 spotify-taste-model/
 ├── src/
-│   ├── spotify_client.py     # API integration (needs fix)
-│   └── data_collector.py     # New: Playlist data extraction
+│   ├── spotify_client.py         # Spotify auth/playlist (labels)
+│   ├── getsongbpm_client.py      # GetSongBPM feature fetcher
+│   └── data_collector.py         # end-to-end collection
 ├── notebooks/
-│   ├── connect.ipynb         # Current: broken API test
-│   ├── 01_data_collection.ipynb    # New: Extract playlist data
-│   ├── 02_feature_exploration.ipynb # New: Correlation & visualization
-│   └── 03_model_training.ipynb     # New: ML pipeline adaptation
-├── data/                     # New: Real playlist datasets
-├── models/                   # New: Trained model storage
-└── plan.md                   # This document
+│   ├── connect.ipynb
+│   ├── 01_data_collection.ipynb
+│   ├── 02_feature_exploration.ipynb
+│   └── 03_model_training.ipynb
+├── data/                         # real datasets + coverage report
+├── models/
+└── plan.md
 ```
 
----
+## Dependencies
+- **Existing:** `pandas`, `numpy`, `scikit-learn`, `spotipy`, `python-dotenv`, `requests` (already pinned in requirements.txt)
+- **New:** `plotly` (interactive scatter for Phase 3)
+- getSongBPM backlink in README (compliant)
 
-## Key Decisions & Questions
-
-### Dataset Size Strategy
-**Current:** 191 songs total (Like: 82, Dislike: 48, Neutral: 61)
-**Critical Check:** Ensure no duplicate track_ids exist across preference categories
-**Options:**
-1. Proceed with deduplicated dataset for initial exploration
-2. Expand playlists after understanding baseline performance
-3. Focus on data quality and label consistency over quantity
-
-### Visualization Priority 
-**User Request:** Interactive scatter plots with color-coded preferences
-**Implementation Options:**
-1. Static matplotlib/seaborn plots (faster development)
-2. Interactive plotly plots (better exploration)
-3. Both approaches
-
-### Feature Focus
-**Sample Data Leaders:** Valence, danceability, energy
-**Question:** Start with these proven features or explore full feature set?
-
----
-
-## Success Metrics
-
-### Phase Completion Criteria:
-- **Phase 1:** ✅ Working API connection and playlist access
-- **Phase 2:** ✅ Clean dataset with all target features  
-- **Phase 3:** ✅ Clear feature-preference insights with visualizations
-- **Phase 4:** ✅ Trained model with ≥80% accuracy
-- **Phase 5:** 🔄 Automated weekly ranking system
-
-### Overall Project Success:
-1. **Understanding gained:** Clear insights into personal music taste patterns
-2. **Model performance:** Reliable preference prediction (≥80% accuracy)
-3. **Practical utility:** Ability to rank new songs by predicted enjoyment
-4. **Foundation built:** Scalable system for ongoing music discovery
+## Risks & Open Items
+- **GetSongBPM coverage for niche/obscure tracks** — Phase 0 spike answers
+- **Feature count reduced** — model likely weaker; acceptance criteria set at Phase 4 to track
+- **API stability** — sole-maintainer, free tier, no guarantee; cache features to CSV to reduce re-fetch
+- **ML-training compliance** — features come from GetSongBPM's independent analysis, not Spotify audio values; Spotify used only for playlist structure/labels

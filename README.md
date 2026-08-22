@@ -2,9 +2,11 @@
 
 A personal machine learning project to predict how much I'll like a song and rank Spotify's Discover Weekly and Release Radar playlists.
 
-This is an exploratory learning project where I combine the Spotify Web API with Python and ML techniques to help prioritise which songs to listen to each week. The goal is to eventually connect to Spotify's developer API to automate weekly playlist pulls and rankings.
+This is an exploratory learning project where I combine Spotify playlist data with [GetSongBPM](https://getsongbpm.com) acoustic features and Python/ML techniques to help prioritise which songs to listen to each week.
 
-**Current Status** (2026-03-01): Spotify API access established! Training dataset curated with ~300 manually labeled songs across 3 preference categories. Ready to implement real data pipeline and feature exploration. 
+**Current Status** (2026-08-22): Spotify API access established. Training dataset curated with manually labeled songs across 3 preference categories (Like / Neutral / Dislike). Data-source pivot in progress: Spotify's audio-features endpoints were deprecated and Spotify's terms now prohibit training ML/AI models on Spotify content, so acoustic features for this project come from [GetSongBPM](https://getsongbpm.com).
+
+> Data powered by [GetSongBPM](https://getsongbpm.com) (BPM, key, and acoustic analysis). 
 
 ## Goals
 - Build a personal music preference model using historical listening data
@@ -14,19 +16,28 @@ This is an exploratory learning project where I combine the Spotify Web API with
 
 ## Training Dataset
 - **Manual Curation:** 3 playlists in 'ML' folder (Like/Dislike/Neutral)
-- **Dataset Size:** ~300 songs (balanced: ~100 per preference category)
+- **Dataset Size:** ~191 songs (Like: 82, Dislike: 48, Neutral: 61)
 - **Quality Control:** Duplicate detection strategy implemented
 - **Labels:** Clean preference classifications for supervised learning
 
+## Data Sources & Why
+Spotify is used **only** for playlist structure, labels, and track titles/artists. Acoustic features no longer come from Spotify: the audio-features endpoints are officially **deprecated**, and Spotify's terms now ban training machine-learning models on Spotify content.
+
+Features are fetched from the [GetSongBPM](https://getsongbpm.com) API instead:
+- `tempo` (BPM), `time_sig`, `key_of` / `open_key` (mode derivable)
+- `danceability`, `acousticness` (0–100, via AcousticBrainz/Essentia)
+- Independent of Spotify, so training a personal taste model stays out of Spotify's restricted-data terms.
+
 ## Proven Approach
-- **Baseline Model:** RandomForest classifier with 95% accuracy on synthetic data
-- **Feature Engineering:** 10 core Spotify audio features (danceability, energy, valence, etc.)
+- **Baseline Model:** RandomForest classifier (95% accuracy on synthetic data)
+- **Feature Set (GetSongBPM):** danceability, acousticness, tempo, key/mode, time_signature
 - **Data Pipeline:** IterativeImputer + LabelEncoder preprocessing approach 
 
 ## Tech Stack
 - Python
 - Jupyter Notebooks
-- Spotipy (Spotify Web API client)
+- Spotipy (Spotify Web API client — playlist/label extraction only)
+- requests (GetSongBPM API client)
 - Pandas & NumPy (data manipulation)
 - scikit-learn (machine learning)
 - Matplotlib / Seaborn (optional visualization)
@@ -40,7 +51,8 @@ spotify-taste-model/
 ├── requirements.txt                   # Python dependencies
 ├── src/
 │   ├── __init__.py                   # Package initialization
-│   ├── spotify_client.py             # Spotify API client (needs import fix)
+│   ├── spotify_client.py             # Spotify API client (playlist/labels)
+│   ├── getsongbpm_client.py          # GetSongBPM feature fetch (planned)
 │   └── data_collector.py             # Playlist data extraction (planned)
 ├── notebooks/
 │   ├── connect.ipynb                 # API connection testing (has import error)
@@ -63,24 +75,24 @@ spotify-taste-model/
 2. Create and activate a virtual environment 
 3. Install dependencies: `pip install -r requirements.txt`
 4. Spotify API credentials already configured in `.env`
-5. **Current Focus:** Follow implementation plan in `plan.md`
-6. Start with Phase 1: Fix API integration and extract playlist data
+5. Add `GETSONGBPM_API_KEY` to `.env` (register at [GetSongBPM](https://getsongbpm.com/api))
+6. **Current Focus:** Follow implementation plan in `plan.md`
+7. Start with Phase 0: GetSongBPM coverage spike, then Phase 1
 
 ## Current Progress
 - ✅ Environment & dependencies configured
 - ✅ Spotify API credentials established
-- ✅ Proven ML pipeline developed (95% accuracy on synthetic data)
-- ✅ Training dataset curated (~300 songs, 3 balanced preference categories)
-- ✅ Comprehensive implementation plan created (see plan.md)
-- 🔄 **NEXT:** Fix API integration and extract real playlist data
-- 🔄 Phase 1: API connection and duplicate detection
-- 🔄 Phase 2: Feature extraction and data collection
+- ✅ Training dataset curated (~191 songs, 3 preference categories)
+- ✅ Data-source pivot documented (Spotify features deprecated → GetSongBPM)
+- 🔄 **NEXT:** Phase 0 — GetSongBPM API coverage spike
+- ⏸️ Phase 1: API connection and duplicate detection
+- ⏸️ Phase 2: Feature collection via GetSongBPM
 - ⏸️ Phase 3: Feature exploration and correlation analysis
 - ⏸️ Phase 4: Model training and evaluation
 
 ## Known Issues
-- **Import Error:** `notebooks/connect.ipynb` expects `get_spotify_client()` function that doesn't exist
-- **API Integration:** Connection established but code mismatch preventing data extraction
-- **Duplicate Detection:** Need to verify no songs exist in multiple preference playlists
+- **Cooldown:** GetSongBPM enforces rate limits (3,000 req/hr); unauthorized requests blocked for 1 hour
+- **Coverage risk:** GetSongBPM is a BPM database — matches may be missing for obscure/niche tracks (Phase 0 measures this)
+- **Feature set reduced:** GetSongBPM lacks valence/energy/instrumentalness/liveness/speechiness/loudness that the original Spotify plan had
 
 See `plan.md` for detailed resolution strategy.
